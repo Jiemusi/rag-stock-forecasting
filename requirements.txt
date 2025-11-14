@@ -1,0 +1,2 @@
+# --- Core Dependencies ---
+pymilvus>=2.4.0   # Zilliz/Milvus client
