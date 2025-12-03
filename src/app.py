@@ -9,6 +9,9 @@ selected_symbol = st.selectbox("Select stock symbol:", symbols)
 
 st.subheader("Configure Query")
 
+import datetime
+as_of_date = st.date_input("Select as-of date:", value=datetime.date(2024, 12, 1))
+
 # User input box
 user_input = st.text_area("Enter market event, news summary, or your own analysis:")
 
@@ -26,6 +29,7 @@ if st.button("Search"):
         results = multimodal_retrieve(
             query_text=query_text,
             query_emb=query_emb,
+            as_of_date=str(as_of_date),
             symbol=selected_symbol,
             top_k=5
         )
@@ -34,5 +38,5 @@ if st.button("Search"):
         for r in results:
             st.write("---")
             st.write(f"**Date:** {r['date']}")
-            st.write(f"**Score:** {r['final_score']:.4f}")
+            st.write(f"**Score:** {r['score_final']:.4f}")
             st.write(r["text"])
