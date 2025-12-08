@@ -16,7 +16,7 @@ from retrieve import multimodal_retrieve
 # CONFIGURATION
 # ================================
 # Input: The CLEAN CSVs from your notebook
-INPUT_DIR = "data/processed_company_dataset" 
+INPUT_DIR = "data/processed_company_dataset/processed_company_dataset"
 # Output: The Final Tensors
 SAVE_DIR = "data/tsfm_dataset"
 CACHE_DIR = "data/cache"
@@ -67,7 +67,7 @@ def fast_embed(text):
 # =====================================================
 # 2. HELPER: RAG RETRIEVAL (NO LEAKAGE)
 # =====================================================
-def get_rag_context(symbol, date_str):
+def get_rag_context(symbol, date_str, df):
     """
     Retrieves (Keys, Values) for the ARM Model.
     STRICTLY enforces date <= date_str.
@@ -77,7 +77,11 @@ def get_rag_context(symbol, date_str):
 
     # A. Query Embedding (Today's News)
     # This represents "The Market Context Now"
-    query_text = f"Financial news for {symbol} on {date_str}"
+    news_rows = df[df["date"] == date_str]
+    if "news_text" in news_rows.columns:
+        query_text = " ".join(news_rows["news_text"].astype(str).tolist())
+    else:
+        query_text = f"{symbol} event on {date_str}"
     query_emb = fast_embed(query_text)
 
     # B. Retrieve History (The "Memory")
@@ -106,18 +110,24 @@ def get_rag_context(symbol, date_str):
             keys_list.append(np.zeros(EMBED_DIM, dtype=np.float32))
             
         # Get Trajectory (Value)
-        # Assuming retrieve.py returns 'future_path' or we use 'return_5d'
-        # If your retrieve.py only returns scalar, we wrap it in a list
-        t = r.get("future_path") 
-        if t is not None:
-            # Truncate or Pad to FORECAST_HORIZON
-            t = np.array(t, dtype=np.float32)
-            if len(t) > FORECAST_HORIZON: t = t[:FORECAST_HORIZON]
-            elif len(t) < FORECAST_HORIZON: 
-                t = np.pad(t, (0, FORECAST_HORIZON - len(t)))
-            values_list.append(t)
-        else:
-            values_list.append(np.zeros(FORECAST_HORIZON, dtype=np.float32))
+        symbol_r = r.get("symbol")
+        date_r = r.get("date")
+        traj = None
+        if symbol_r is not None and date_r is not None:
+            try:
+                df_sym = df[df["symbol"] == symbol_r].sort_values("date")
+                closes = df_sym["close"].values
+                dates_sym = df_sym["date"].dt.strftime("%Y-%m-%d").values
+                if date_r in dates_sym:
+                    idx = list(dates_sym).index(date_r)
+                    if idx + FORECAST_HORIZON < len(closes):
+                        base = closes[idx]
+                        traj = (closes[idx+1:idx+1+FORECAST_HORIZON] / base - 1).astype(np.float32)
+            except:
+                traj = None
+        if traj is None:
+            traj = np.zeros(FORECAST_HORIZON, dtype=np.float32)
+        values_list.append(traj)
 
     # Pad if we found fewer than K events
     while len(keys_list) < TOP_K_EVENTS:
@@ -133,6 +143,18 @@ def get_rag_context(symbol, date_str):
     
     RAG_CACHE[cache_key] = rag_packet
     return rag_packet
+
+def compute_future_trajectory(df, horizon=FORECAST_HORIZON):
+    closes = df["close"].values
+    trajs = []
+    for i in range(len(df)):
+        if i + horizon >= len(df):
+            trajs.append([np.nan]*horizon)
+        else:
+            base = closes[i]
+            future = (closes[i+1:i+1+horizon] / base - 1).tolist()
+            trajs.append(future)
+    return np.array(trajs, dtype=np.float32)
 
 # =====================================================
 # 3. MAIN PROCESSING LOOP
@@ -151,16 +173,12 @@ def process_file(filepath):
         'close', 'is_trading_day'
     ]
     
-    # Create Target (5-Day Return)
-    # We calculate it here because the notebook might not have done it
-    df['target'] = df['close'].pct_change(FORECAST_HORIZON).shift(-FORECAST_HORIZON)
-    
-    # Drop the end rows where target is NaN
-    df = df.dropna(subset=['target'])
+    trajectories = compute_future_trajectory(df)
+    df["target_traj"] = list(trajectories)
+    df = df.dropna(subset=["target_traj"])
     
     # Prepare Numpy arrays for speed
     feat_matrix = df[FEATURE_COLS].values.astype(np.float32)
-    target_vec = df['target'].values.astype(np.float32)
     dates = df['date'].dt.strftime("%Y-%m-%d").values
     
     samples = []
@@ -178,10 +196,10 @@ def process_file(filepath):
         x_struct = feat_matrix[t-WINDOW_SIZE : t]
         
         # 2. Unstructured Data (RAG)
-        rag_data = get_rag_context(symbol, curr_date)
+        rag_data = get_rag_context(symbol, curr_date, df)
         
         # 3. Target
-        y = target_vec[t]
+        y = np.array(df["target_traj"].iloc[t], dtype=np.float32)
         
         # 4. Assemble Sample
         samples.append({
@@ -191,7 +209,7 @@ def process_file(filepath):
             "x_query": rag_data['q_emb'],       # (3072,)
             "x_keys": rag_data['k_embs'],       # (5, 3072)
             "x_values": rag_data['v_trajs'],    # (5, 5)
-            "y": y                              # (1,)
+            "y": y                              # (5,)
         })
         
     return samples
@@ -221,7 +239,7 @@ def main():
     train, val, test = [], [], []
     for s in all_samples:
         d = s['date']
-        if "2022-01-01" <= d <= "2023-05-31": train.append(s)
+        if "2021-07-03" <= d <= "2023-05-31": train.append(s)
         elif "2023-07-01" <= d <= "2023-12-31": val.append(s)
         elif d >= "2024-02-01": test.append(s)
 
