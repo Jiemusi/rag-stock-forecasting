@@ -50,19 +50,26 @@ def save_caches():
     with open(EMBED_CACHE_FILE, "wb") as f: pickle.dump(EMBED_CACHE, f)
     with open(RAG_CACHE_FILE, "wb") as f: pickle.dump(RAG_CACHE, f)
 
-# =====================================================
-# 1. HELPER: FAST EMBEDDING
-# =====================================================
-def fast_embed(text):
-    if text in EMBED_CACHE: return EMBED_CACHE[text]
-    try:
-        emb = embed_text(text)
-        # Convert list to numpy immediately to save memory
-        emb_np = np.array(emb, dtype=np.float32)
-        EMBED_CACHE[text] = emb_np
-        return emb_np
-    except:
-        return np.zeros(EMBED_DIM, dtype=np.float32)
+from openai import OpenAI
+client = OpenAI()
+
+def embed_openai(text):
+    if text in EMBED_CACHE:
+        return EMBED_CACHE[text]
+    if text is None or text.strip() == "":
+        text = "no news available"
+
+    resp = client.embeddings.create(
+        model="text-embedding-3-large",
+        input=text
+    )
+    base = resp.data[0].embedding  # 3072-dim list
+
+    import numpy as np
+    arr = np.array(base, dtype=np.float32)
+
+    EMBED_CACHE[text] = arr
+    return arr
 
 # =====================================================
 # 2. HELPER: RAG RETRIEVAL (NO LEAKAGE)
@@ -82,7 +89,7 @@ def get_rag_context(symbol, date_str, df):
         query_text = " ".join(news_rows["news_text"].astype(str).tolist())
     else:
         query_text = f"{symbol} event on {date_str}"
-    query_emb = fast_embed(query_text)
+    query_emb = embed_openai(query_text)
 
     # B. Retrieve History (The "Memory")
     try:

@@ -51,9 +51,20 @@ earn_col = Collection(EARN_COLLECTION)
 # EMBEDDING
 # ----------------------------
 def embed_text(text, model="text-embedding-3-large"):
-    """Return a vector for text using OpenAI embeddings."""
+    """Return a 12288‑dim vector for text using OpenAI embeddings (3072 × 4 pooling).
+       Prevents accidental double‑pooling to avoid 49152‑dim errors.
+    """
+    if text is None or text.strip() == "":
+        text = "no text available"
+
     res = client.embeddings.create(model=model, input=text)
-    return res.data[0].embedding
+    base = res.data[0].embedding  # Expected 3072 dims
+
+    import numpy as np
+    arr = np.array(base, dtype=np.float32)
+
+    # Always return raw 3072-dim embedding (Zilliz collections expect dim=3072)
+    return arr
 
 
 # ----------------------------

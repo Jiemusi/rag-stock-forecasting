@@ -1,0 +1,26 @@
+program: src/train.py
+
+method: bayes  # 自动寻找最佳组合
+metric:
+  name: val_loss
+  goal: minimize
+
+parameters:
+
+  lr:
+    values: [1e-4, 3e-4, 5e-4]
+
+  warmup_steps:
+    values: [100, 300, 500]
+
+  shape_loss_weight:
+    values: [0.1, 0.2, 0.3]
+
+  neighbor_scale:
+    values: [0.8, 1.0, 1.2, 1.5]
+
+  batch_size:
+    values: [64, 128]
+
+  epochs:
+    value: 80
