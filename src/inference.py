@@ -246,7 +246,7 @@ def load_tsfm(model_path: str, device: str = DEVICE) -> nn.Module:
 def run_inference(
     symbol: str,
     date_str: str,
-    model_path: str = "tsfm_best_val_74.pt",
+    model_path: str = "src/tsfm_swa_final.pt",
     top_k: int = TOP_K_NEIGHBORS,
     device: str = DEVICE,
 ) -> Dict[str, Any]:
