@@ -1,0 +1,63 @@
+Inference 1
+
+(venv) james@pop-os:~/Projects/rag-stock-forecasting$ python3 -m src.eval_custom \
+    --symbol AAPL \
+    --start_date 2024-01-01 \
+    --model_path tsfm_best_val_74.pt
+
+================ CUSTOM EVAL SUMMARY ================
+Symbol:        AAPL
+Horizon:       5 days
+Samples used:  361
+----------------------------------------------------
+Full H-day trajectory:
+  MODEL  MSE:  0.000164
+  MODEL  RMSE: 0.012804
+  MODEL  MAE:  0.008912
+  ZERO   MSE:  0.000138
+  ZERO   RMSE: 0.011748
+  ZERO   MAE:  0.007131
+----------------------------------------------------
+Last-day (day H) only:
+  MODEL  MSE:  0.000184
+  MODEL  RMSE: 0.013570
+  MODEL  MAE:  0.009846
+  ZERO   MSE:  0.000137
+  ZERO   RMSE: 0.011718
+  ZERO   MAE:  0.007110
+----------------------------------------------------
+Directional accuracy (last day, |true|>eps): 0.575
+Per-day correlation (pred vs true):
+  Day 1: 0.020
+  Day 2: -0.013
+  Day 3: -0.059
+  Day 4: -0.058
+  Day 5: -0.071
+
+
+Inference 2
+
+(venv) james@pop-os:~/Projects/rag-stock-forecasting$ python3 -m src.eval_panel \
+    --model_path tsfm_best_val_74.pt \
+    --start_date 2024-01-01 \
+    --end_date 2024-12-31 \
+    --horizon 5 \
+    --quantile 0.2
+
+================ PANEL EVAL SUMMARY ================
+Dates used (IC):           248
+Mean IC:                   -0.0635
+IC std:                    0.3911
+IC t-stat:                 -2.56
+
+Long-Short (top/bottom quantile):
+  Quantile:                0.20
+  Dates used (LS):         361
+  Mean LS return:          0.000673
+  LS std:                  0.061171
+  LS Sharpe (per-period):  0.01
+  LS hit-rate (r_LS>0):    0.307
+
+Global sign hit-rate (all date,symbol pairs):
+  Hit-rate:                0.519
+  N pairs used:            2229
