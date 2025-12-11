@@ -1,4 +1,4 @@
-
+import os
 import sys
 from typing import Dict, Any, List, Tuple
 
@@ -298,3 +298,39 @@ def run_inference(
         "rag_results": rag_results,
         "actual": actual_np,
     }
+
+
+# ------------------------------------------------------------------
+# Simple explainability / visualization
+# ------------------------------------------------------------------
+def explain_inference(result: Dict[str, Any]) -> None:
+    symbol = result["symbol"]
+    date = result["date"]
+    y_pred = result["prediction"]
+    actual = result["actual"]
+    attn = result["attention"]
+    neighbors = result["rag_results"]
+
+    print("\n=== EXPLAINABILITY REPORT ===")
+    print(f"Symbol: {symbol} | Date: {date}")
+    print("\nQuery text used for RAG:")
+    print(result["query_text"])
+    print("\nPredicted 5-day trajectory (relative returns):")
+    print(np.round(y_pred, 4))
+
+    print("\nActual 5-day trajectory (if available):")
+    print(np.round(actual, 4))
+
+    print("\nNeighbor attention weights:")
+    for i, w in enumerate(attn):
+        if i < len(neighbors):
+            r = neighbors[i]
+            print(f"  Neighbor {i}: w={w:.3f}, date={r['date']}, source={r['source']}")
+
+
+# ------------------------------------------------------------------
+# CLI
+# ------------------------------------------------------------------
+if __name__ == "__main__":
+    out = run_inference("AAPL", "2022-12-30")
+    explain_inference(out)
