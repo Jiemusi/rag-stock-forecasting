@@ -303,31 +303,93 @@ def run_inference(
 # ------------------------------------------------------------------
 # Simple explainability / visualization
 # ------------------------------------------------------------------
-def explain_inference(result: Dict[str, Any]) -> None:
+# def explain_inference(result: Dict[str, Any]) -> None:
+#     symbol = result["symbol"]
+#     date = result["date"]
+#     y_pred = result["prediction"]
+#     actual = result["actual"]
+#     attn = result["attention"]
+#     neighbors = result["rag_results"]
+
+#     print("\n=== EXPLAINABILITY REPORT ===")
+#     print(f"Symbol: {symbol} | Date: {date}")
+#     print("\nQuery text used for RAG:")
+#     print(result["query_text"])
+#     print("\nPredicted 5-day trajectory (relative returns):")
+#     print(np.round(y_pred, 4))
+
+#     print("\nActual 5-day trajectory (if available):")
+#     print(np.round(actual, 4))
+
+#     print("\nNeighbor attention weights:")
+#     for i, w in enumerate(attn):
+#         if i < len(neighbors):
+#             r = neighbors[i]
+#             print(f"  Neighbor {i}: w={w:.3f}, date={r['date']}, source={r['source']}")
+def explain_inference(result: Dict[str, Any]):
+    """
+    Streamlit-friendly and console-friendly explainability function.
+    Returns a dictionary of matplotlib figures for visualization.
+    """
+
+    figs = {}
+
     symbol = result["symbol"]
     date = result["date"]
-    y_pred = result["prediction"]
-    actual = result["actual"]
-    attn = result["attention"]
-    neighbors = result["rag_results"]
+    y_pred = result["prediction"]         # shape (HORIZON,)
+    actual = result["actual"]             # shape (HORIZON,) or zeros
+    attn = result["attention"]            # shape (K,)
+    neighbor_values = result["neighbor_values"]  # shape (K, HORIZON)
 
-    print("\n=== EXPLAINABILITY REPORT ===")
-    print(f"Symbol: {symbol} | Date: {date}")
-    print("\nQuery text used for RAG:")
-    print(result["query_text"])
-    print("\nPredicted 5-day trajectory (relative returns):")
-    print(np.round(y_pred, 4))
+    # -------------------------------
+    # 1) Predicted 5-day trajectory
+    # -------------------------------
+    fig1, ax1 = plt.subplots()
+    ax1.plot(y_pred, label="Predicted", linewidth=3)
+    ax1.set_title(f"Predicted 5-Day Trajectory • {symbol} @ {date}")
+    ax1.set_xlabel("Day")
+    ax1.set_ylabel("Return")
+    ax1.legend()
+    figs["prediction"] = fig1
 
-    print("\nActual 5-day trajectory (if available):")
-    print(np.round(actual, 4))
+    # -------------------------------
+    # 2) Actual vs predicted trajectory
+    # -------------------------------
+    if actual is not None and len(actual) > 0:
+        fig2, ax2 = plt.subplots()
+        ax2.plot(y_pred, label="Predicted", linewidth=3)
+        ax2.plot(actual, label="Actual", linewidth=3)
+        ax2.set_title(f"Predicted vs Actual • {symbol} @ {date}")
+        ax2.set_xlabel("Day")
+        ax2.set_ylabel("Return")
+        ax2.legend()
+        figs["actual"] = fig2
 
-    print("\nNeighbor attention weights:")
-    for i, w in enumerate(attn):
-        if i < len(neighbors):
-            r = neighbors[i]
-            print(f"  Neighbor {i}: w={w:.3f}, date={r['date']}, source={r['source']}")
+    # -------------------------------
+    # 3) Attention weights over neighbors
+    # -------------------------------
+    fig3, ax3 = plt.subplots()
+    ax3.bar(range(len(attn)), attn)
+    ax3.set_title("Attention Weights Over Retrieved Events")
+    ax3.set_xlabel("Neighbor Index")
+    ax3.set_ylabel("Weight")
+    figs["attention"] = fig3
 
+    # -------------------------------
+    # 4) Neighbor future trajectories
+    # -------------------------------
+    fig4, ax4 = plt.subplots()
+    for i, traj in enumerate(neighbor_values):
+        ax4.plot(traj, alpha=0.5, label=f"Neighbor {i}")
+    ax4.plot(y_pred, color="black", linewidth=3, label="Predicted")
+    ax4.set_title("Neighbor Trajectories vs Model Prediction")
+    ax4.set_xlabel("Day")
+    ax4.set_ylabel("Return")
+    ax4.legend()
+    figs["neighbors"] = fig4
 
+    return figs
+    
 # ------------------------------------------------------------------
 # CLI
 # ------------------------------------------------------------------

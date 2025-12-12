@@ -1,123 +1,138 @@
-"""
-plot_backtest.py — Visualization Toolkit for Backtesting Results
-Compatible with backtest.py output:
-results = {
-    "pred_df": pred_df,
-    "real_df": real_df,
-    "IC": ic_res,
-    "LongShort": ls_res,
-    "HitRate": hit_res
-}
-"""
-
 import matplotlib.pyplot as plt
 import seaborn as sns
+import streamlit as st
 import numpy as np
+from src.eval_panel import compute_ic, compute_long_short, compute_hit_rate
+import pandas as pd
 
+def plot_ic_timeseries(bt):
+    ic = bt.get("ic_series")
+    if ic is None or len(ic)==0:
+        st.warning("No IC series.")
+        return
+    fig, ax = plt.subplots(figsize=(6,3))
+    ax.plot(ic.index, ic.values)
+    ax.set_title("IC Timeseries")
+    ax.set_xlabel("Date")
+    ax.set_ylabel("IC")
+    st.pyplot(fig)
 
-# ============================================================
-# 1. PLOT IC TIME SERIES
-# ============================================================
+def plot_longshort_timeseries(bt):
+    ls = bt.get("ls_series")
+    if ls is None or len(ls)==0:
+        st.warning("No Long-Short series.")
+        return
+    fig, ax = plt.subplots(figsize=(6,3))
+    ax.plot(ls.index, ls.values)
+    ax.set_title("Long-Short Return")
+    ax.set_xlabel("Date")
+    ax.set_ylabel("Return")
+    st.pyplot(fig)
 
-def plot_ic_timeseries(results):
-    ic = results["IC"]["daily_ic"]
-    rank_ic = results["IC"]["daily_rank_ic"]
+def plot_cumulative_pnl(bt):
+    ls = bt.get("ls_series")
+    if ls is None or len(ls)==0:
+        st.warning("No LS series for PnL.")
+        return
+    pnl = np.cumsum(ls.values)
+    fig, ax = plt.subplots(figsize=(6,3))
+    ax.plot(ls.index, pnl)
+    ax.set_title("Cumulative PnL")
+    ax.set_xlabel("Date")
+    ax.set_ylabel("PnL")
+    st.pyplot(fig)
 
-    plt.figure(figsize=(10, 4))
-    plt.plot(ic, label="IC", linewidth=2)
-    plt.plot(rank_ic, label="Rank IC", linewidth=2)
-    plt.axhline(0, color="black", linestyle="--")
-    plt.title("IC / Rank IC Time Series")
-    plt.xlabel("Time")
-    plt.ylabel("Correlation")
-    plt.legend()
-    plt.tight_layout()
-    plt.show()
+def plot_ic_histogram(bt):
+    ic = bt.get("ic_series")
+    if ic is None or len(ic)==0:
+        st.warning("No IC series.")
+        return
+    fig, ax = plt.subplots(figsize=(6,3))
+    sns.histplot(ic.values, kde=True, ax=ax)
+    ax.set_title("IC Distribution")
+    ax.set_xlabel("IC")
+    st.pyplot(fig)
 
+def plot_backtest_dashboard(bt):
+    mean_ic = bt.get("mean_ic")
+    rank_ic = bt.get("rank_ic")
+    sharpe = bt.get("sharpe")
+    hit = bt.get("hit_rate")
+    if mean_ic is None:
+        st.write("**Mean IC:** N/A")
+    else:
+        st.write(f"**Mean IC:** {mean_ic:.4f}")
 
-# ============================================================
-# 2. PLOT LONG-SHORT SPREAD
-# ============================================================
+    if rank_ic is None:
+        st.write("**Rank IC:** N/A")
+    else:
+        st.write(f"**Rank IC:** {rank_ic:.4f}")
 
-def plot_longshort_timeseries(results):
-    spread = results["LongShort"]["daily_spread"]
+    if sharpe is None:
+        st.write("**Sharpe:** N/A")
+    else:
+        st.write(f"**Sharpe:** {sharpe:.4f}")
 
-    plt.figure(figsize=(10, 4))
-    plt.plot(spread, label="Long-Short Spread", linewidth=2)
-    plt.axhline(0, color="black", linestyle="--")
-    plt.title("Daily Long-Short Spread")
-    plt.xlabel("Time")
-    plt.ylabel("Return Difference")
-    plt.legend()
-    plt.tight_layout()
-    plt.show()
+    if hit is None:
+        st.write("**Hit Rate:** N/A")
+    else:
+        st.write(f"**Hit Rate:** {hit:.4f}")
 
+def run_backtest(results, rank_normalize=False, quantile=0.2):
+    """
+    results: list of inference dicts, each with fields:
+      'date', 'symbol', 'prediction' (vector), 'actual' (vector)
+    We take last-day prediction and last-day actual for each entry.
+    """
+    # results must be a list of inference dicts
+    if results is None:
+        return {}
 
-# ============================================================
-# 3. PLOT CUMULATIVE PNL
-# ============================================================
+    # If results is a DataFrame (should NOT happen in app), reject it
+    if isinstance(results, pd.DataFrame):
+        results = results.to_dict(orient="records")
 
-def plot_cumulative_pnl(results):
-    cum_pnl = results["LongShort"]["cumulative_pnl"]
+    # Now results should be a list
+    if not isinstance(results, list) or len(results) == 0:
+        return {}
 
-    plt.figure(figsize=(10, 4))
-    plt.plot(cum_pnl, label="Cumulative PnL", linewidth=3)
-    plt.axhline(0, color="black", linestyle="--")
-    plt.title("Cumulative Long-Short PnL")
-    plt.xlabel("Time")
-    plt.ylabel("Cumulative Return")
-    plt.legend()
-    plt.tight_layout()
-    plt.show()
+    rows = []
+    for r in results:
+        if not isinstance(r, dict):
+            continue
+        pred = r.get("prediction")
+        act = r.get("actual")
+        if pred is None or act is None or len(pred)==0 or len(act)==0:
+            continue
+        pred_ret = float(pred[-1])
+        true_ret = float(act[-1])
+        rows.append({
+            "date": r["date"],
+            "symbol": r["symbol"],
+            "pred": pred_ret,
+            "true": true_ret
+        })
 
+    if rows is None or len(rows) == 0:
+        return {}
 
-# ============================================================
-# 4. IC DISTRIBUTION HISTOGRAM
-# ============================================================
+    panel_df = pd.DataFrame(rows)
+    panel_df["date"] = pd.to_datetime(panel_df["date"])
+    panel_df = panel_df.sort_values(["date","symbol"])
 
-def plot_ic_histogram(results):
-    ic = results["IC"]["daily_ic"]
+    if rank_normalize:
+        panel_df["pred"] = panel_df.groupby("date")["pred"].rank(pct=True)
 
-    plt.figure(figsize=(6, 4))
-    sns.histplot(ic, kde=True, bins=20)
-    plt.title("Distribution of Daily IC")
-    plt.xlabel("IC")
-    plt.ylabel("Frequency")
-    plt.tight_layout()
-    plt.show()
+    ic_series, ic_summary = compute_ic(panel_df)
+    ls_series, ls_summary = compute_long_short(panel_df, quantile=quantile)
+    hit_rate, n_used = compute_hit_rate(panel_df)
 
-
-# ============================================================
-# 5. FULL BACKTEST DASHBOARD
-# ============================================================
-
-def plot_backtest_dashboard(results):
-    plt.figure(figsize=(16, 10))
-
-    # ---- IC ----
-    plt.subplot(2, 2, 1)
-    plt.plot(results["IC"]["daily_ic"], label="IC", linewidth=2)
-    plt.plot(results["IC"]["daily_rank_ic"], label="Rank IC", linewidth=2)
-    plt.axhline(0, color="black", linestyle="--")
-    plt.title("IC / Rank IC Time Series")
-    plt.legend()
-
-    # ---- Spread ----
-    plt.subplot(2, 2, 2)
-    plt.plot(results["LongShort"]["daily_spread"], label="Daily Spread")
-    plt.axhline(0, color="black", linestyle="--")
-    plt.title("Long-Short Spread")
-
-    # ---- Cumulative PnL ----
-    plt.subplot(2, 2, 3)
-    plt.plot(results["LongShort"]["cumulative_pnl"], label="Cumulative PnL", linewidth=2)
-    plt.axhline(0, color="black", linestyle="--")
-    plt.title("Cumulative PnL")
-
-    # ---- IC Histogram ----
-    plt.subplot(2, 2, 4)
-    sns.histplot(results["IC"]["daily_ic"], kde=True, bins=20)
-    plt.title("IC Distribution")
-
-    plt.tight_layout()
-    plt.show()
+    bt = {
+        "ic_series": ic_series,
+        "mean_ic": ic_summary["mean_ic"],
+        "rank_ic": ic_summary["mean_ic"],
+        "ls_series": ls_series,
+        "sharpe": ls_summary["sharpe"],
+        "hit_rate": hit_rate
+    }
+    return bt

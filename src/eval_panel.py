@@ -27,8 +27,9 @@ from glob import glob
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
+import matplotlib.pyplot as plt
 
-from .inference import run_inference
+from src.inference import run_inference
 
 
 # -------------------------------------------------------------
@@ -42,7 +43,11 @@ def load_price_panel():
     Returns a DataFrame with at least:
         ['date', 'symbol', 'close', 'date_str']
     """
-    files = glob("data/processed_company_dataset/*.csv")
+    ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    PRICE_DIR = os.path.join(ROOT, "data/processed_company_dataset")
+    print(f"[DEBUG] Looking for CSVs in: {PRICE_DIR}")
+    files = glob(os.path.join(PRICE_DIR, "*.csv"))
+    print(f"[DEBUG] Matched files: {files}")
     if not files:
         raise FileNotFoundError("No CSV files found in data/processed_company_dataset/*.csv")
 
@@ -316,7 +321,7 @@ def compute_hit_rate(panel_df: pd.DataFrame, eps: float = 0.0):
 
 def main():
     parser = argparse.ArgumentParser(description="Panel (multi-stock) evaluation for TSFM.")
-    parser.add_argument("--model_path", type=str, default="tsfm_swa_final.pt",
+    parser.add_argument("--model_path", type=str, default="tsfm_best_val_74.pt",
                         help="Path to TSFM checkpoint.")
     parser.add_argument("--start_date", type=str, default=None,
                         help="Start date (YYYY-MM-DD) for anchor dates, optional.")
@@ -326,6 +331,13 @@ def main():
                         help="Forecast horizon H (days). Used for true last-day return.")
     parser.add_argument("--quantile", type=float, default=0.2,
                         help="Quantile for long-short (e.g., 0.2 = top/bottom 20%).")
+    parser.add_argument("--use_rank", action="store_true",
+                        help="If set, convert predictions to cross-sectional ranks (per date) before computing IC and long-short.")
+    parser.add_argument("--output_panel", type=str, default=None,
+                        help="Optional path to save the panel_df with [date, symbol, pred, true]. "
+                             "If endswith .csv, saves CSV; if .pkl, saves pickle; otherwise uses pickle.")
+    parser.add_argument("--no_plots", action="store_true",
+                        help="If set, skip generating and saving backtest plots.")
     args = parser.parse_args()
 
     print("=== BUILDING PANEL PREDICTIONS ===")
@@ -335,6 +347,11 @@ def main():
         end_date=args.end_date,
         horizon=args.horizon,
     )
+
+    # ----- Optional rank-normalization of predictions -----
+    if args.use_rank:
+        print("Applying cross-sectional rank transformation to predictions...")
+        panel_df["pred"] = panel_df.groupby("date")["pred"].rank(pct=True)
 
     print(f"\nPanel size: {len(panel_df)} rows, "
           f"{panel_df['symbol'].nunique()} symbols, "
@@ -367,6 +384,64 @@ def main():
     print("\nGlobal sign hit-rate (all date,symbol pairs):")
     print(f"  Hit-rate:                {hit_rate:.3f}")
     print(f"  N pairs used:            {n_hit}")
+
+    # ----- Optional: save panel to disk -----
+    if args.output_panel is not None:
+        out_path = args.output_panel
+        # Decide format by extension
+        ext = os.path.splitext(out_path)[1].lower()
+        print(f"\nSaving panel_df to: {out_path}")
+        if ext == ".csv":
+            panel_df.to_csv(out_path, index=False)
+        else:
+            # default to pickle for .pkl or no/unknown extension
+            panel_df.to_pickle(out_path)
+
+    # ----- Optional: generate basic plots -----
+    if not args.no_plots:
+        # Determine results directory relative to repo root
+        root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        results_dir = os.path.join(root_dir, "results")
+        os.makedirs(results_dir, exist_ok=True)
+
+        # 1) Daily IC time series
+        plt.figure()
+        ic_series.plot()
+        plt.axhline(0.0, linestyle="--", linewidth=1)
+        plt.title("Daily Information Coefficient (IC)")
+        plt.xlabel("Date")
+        plt.ylabel("IC")
+        plt.tight_layout()
+        ic_ts_path = os.path.join(results_dir, "ic_timeseries.png")
+        plt.savefig(ic_ts_path)
+        plt.close()
+        print(f"Saved IC time series plot to: {ic_ts_path}")
+
+        # 2) IC histogram
+        plt.figure()
+        plt.hist(ic_series.values, bins=30)
+        plt.title("IC Distribution")
+        plt.xlabel("IC")
+        plt.ylabel("Frequency")
+        plt.tight_layout()
+        ic_hist_path = os.path.join(results_dir, "ic_histogram.png")
+        plt.savefig(ic_hist_path)
+        plt.close()
+        print(f"Saved IC histogram plot to: {ic_hist_path}")
+
+        # 3) Long-short cumulative return (equity curve)
+        equity_curve = ls_series.cumsum()
+        plt.figure()
+        equity_curve.plot()
+        plt.axhline(0.0, linestyle="--", linewidth=1)
+        plt.title("Long-Short Strategy Cumulative Return")
+        plt.xlabel("Date")
+        plt.ylabel("Cumulative Return")
+        plt.tight_layout()
+        ls_equity_path = os.path.join(results_dir, "longshort_equity_curve.png")
+        plt.savefig(ls_equity_path)
+        plt.close()
+        print(f"Saved long-short equity curve plot to: {ls_equity_path}")
 
 
 if __name__ == "__main__":
