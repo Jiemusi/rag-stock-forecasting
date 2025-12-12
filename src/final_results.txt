@@ -1,0 +1,73 @@
+Baseline Model:
+
+(venv) james@pop-os:~/Projects/rag-stock-forecasting/src$ python3 eval_baseline_model.py
+
+================ BASELINE PANEL EVAL (test.pkl) ================
+Test path:                ../data/tsfm_dataset_baseline/test.pkl
+Model path:               tsfm_baseline_best_val.pt
+Samples (N):              3350
+Window length (T):        30
+Horizon (H):              5
+----------------------------------------------------
+Cross-sectional IC (last day returns):
+  Dates used (IC):        330
+  Mean IC:                0.0669
+  IC std:                 0.3707
+  IC t-stat:              3.28
+----------------------------------------------------
+Long-Short (top/bottom quantile, last day returns):
+  Quantile:               0.20
+  Dates used (LS):        330
+  Mean LS return:         0.012441
+  LS std:                 0.062354
+  LS Sharpe (per-period): 0.20
+  LS hit-rate (r_LS>0):   0.564
+----------------------------------------------------
+Global sign hit-rate (all date,symbol pairs):
+  Hit-rate:               0.442
+  N pairs used:           3299
+====================================================
+
+
+TSFM_RAG Model:
+
+(venv) james@pop-os:~/Projects/rag-stock-forecasting$ python3 -m src.eval_panel
+
+================ PANEL EVAL SUMMARY ================
+Dates used (IC):           228
+Mean IC:                   0.0083
+IC std:                    0.3204
+IC t-stat:                 0.39
+
+Long-Short (top/bottom quantile):
+  Quantile:                0.20
+  Dates used (LS):         330
+  Mean LS return:          0.003317
+  LS std:                  0.065707
+  LS Sharpe (per-period):  0.05
+  LS hit-rate (r_LS>0):    0.342
+
+Global sign hit-rate (all date,symbol pairs):
+  Hit-rate:                0.525
+  N pairs used:            2049
+  
+  
+Second TSFM_RAG with Plots:
+  
+  ================ PANEL EVAL SUMMARY ================
+Dates used (IC):           228
+Mean IC:                   0.0106
+IC std:                    0.3050
+IC t-stat:                 0.53
+
+Long-Short (top/bottom quantile):
+  Quantile:                0.20
+  Dates used (LS):         330
+  Mean LS return:          0.003349
+  LS std:                  0.065717
+  LS Sharpe (per-period):  0.05
+  LS hit-rate (r_LS>0):    0.342
+
+Global sign hit-rate (all date,symbol pairs):
+  Hit-rate:                0.525
+  N pairs used:            2277
