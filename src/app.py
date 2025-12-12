@@ -56,6 +56,7 @@ page = st.sidebar.radio(
         "🤖 Model Prediction & Explanation",
         "📈 Backtest Results",
         "⚙️ End-to-End Pipeline (Benchmark + Backtest + LLM Report)",
+        "⚙️ TS-RAG: Query → Prediction → LLM Report",
     ],
 )
 
@@ -114,16 +115,18 @@ if page == "🤖 Model Prediction & Explanation":
             date_str=str(as_of_date),
             model_path="src/tsfm_swa_final.pt"
         )
+        st.write("Raw prediction array:", out["prediction"])
+        st.write("Attention weights:", out["attention"])
 
         st.subheader("Predicted 5‑Day Return Trajectory")
         fig, ax = plt.subplots()
         ax.plot(out["prediction"], linewidth=3)
         st.pyplot(fig)
 
-        st.subheader("Attention Weights for Retrieved Events")
-        fig2, ax2 = plt.subplots()
-        ax2.bar(range(len(out["attention"])), out["attention"])
-        st.pyplot(fig2)
+        # st.subheader("Attention Weights for Retrieved Events")
+        # fig2, ax2 = plt.subplots()
+        # ax2.bar(range(len(out["attention"])), out["attention"])
+        # st.pyplot(fig2)
 
         st.subheader("Neighbor Future Trajectories")
         fig3, ax3 = plt.subplots()
@@ -136,8 +139,12 @@ if page == "🤖 Model Prediction & Explanation":
         st.subheader("Predicted vs Actual (if available)")
         figs = explain_inference(out)
         if isinstance(figs, dict):
-            if "neighbor_attn" in figs:
-                st.pyplot(figs["neighbor_attn"])
+            # RAG score-based attention over neighbors
+            if "attention" in figs:
+                st.pyplot(figs["attention"])
+            # Optional: raw TSFM attention (for debugging / comparison)
+            if "model_attention" in figs:
+                st.pyplot(figs["model_attention"])
             if "prediction" in figs:
                 st.pyplot(figs["prediction"])
             if "pred_vs_actual" in figs:
@@ -211,6 +218,177 @@ if page == "📈 Backtest Results":
 
             st.write("### IC Distribution")
             plot_ic_histogram(bt_panel)
+
+
+# 0. SINGLE-PAGE END-TO-END TS-RAG (Query → Prediction → LLM Report)
+# ============================================================
+
+if page == "⚙️ TS-RAG: Query → Prediction → LLM Report":
+    st.title("TS-RAG: Query → Prediction → LLM Report")
+
+    st.markdown("""
+    1. **You describe a news event / thesis / question**  
+    2. **System retrieves similar historical events (RAG)**  
+    3. **TSFM+RAG model makes a forward return prediction**  
+    4. **LLM writes a sell-side style note summarizing the view**
+    """)
+
+    user_query = st.text_area(
+        "Describe the market event, news, or your thesis for this stock:",
+        placeholder="e.g., NVDA just guided revenue above expectations due to strong AI GPU demand..."
+    )
+
+    if st.button("Run TS-RAG Pipeline"):
+        if not user_query.strip():
+            st.error("Please enter a description or question.")
+        else:
+            # 1) Build query & run RAG retrieval
+            st.subheader("🔍 RAG: Similar Historical Events")
+
+            query_text, query_emb = build_query_from_text(user_query)
+
+            st.write("**Query Text Preview**")
+            st.write(query_text[:500] + "…")
+
+            results = multimodal_retrieve(
+                query_text=query_text,
+                query_emb=query_emb,
+                as_of_date=str(as_of_date),
+                symbol=selected_symbol,
+                top_k=5
+            )
+
+            if not results:
+                st.warning("No RAG results returned for this query and date window.")
+            else:
+                for i, r in enumerate(results, start=1):
+                    st.write("---")
+                    st.write(f"**[{i}] Date:** {r['date']}")
+                    if "symbol" in r:
+                        st.write(f"**Symbol:** {r['symbol']}")
+                    st.write(f"**Score:** {r.get('score_final', 0.0):.4f}")
+                    st.write(r.get("text", "")[:600] + "…")
+
+            # 2) Run TSFM+RAG prediction for the selected symbol / date
+            st.subheader("🤖 TSFM+RAG Prediction")
+
+            try:
+                out = run_inference(
+                    symbol=selected_symbol,
+                    date_str=str(as_of_date),
+                    model_path="src/tsfm_swa_final.pt"
+                )
+            except Exception as e:
+                st.error(f"Model inference failed: {e}")
+                out = None
+
+            if out is not None:
+                # Predicted trajectory
+                if "prediction" in out:
+                    st.write("**Predicted H-day Return Trajectory**")
+                    fig, ax = plt.subplots()
+                    ax.plot(out["prediction"], linewidth=3)
+                    ax.set_xlabel("Step")
+                    ax.set_ylabel("Predicted Return")
+                    st.pyplot(fig)
+
+                # Attention over neighbors
+                if "attention" in out:
+                    st.write("**Attention Weights over Retrieved Events**")
+                    fig2, ax2 = plt.subplots()
+                    ax2.bar(range(len(out["attention"])), out["attention"])
+                    ax2.set_xlabel("Neighbor Index")
+                    ax2.set_ylabel("Attention Weight")
+                    st.pyplot(fig2)
+
+                # Neighbor trajectories
+                if "neighbor_values" in out:
+                    st.write("**Neighbor Future Trajectories vs Model Prediction**")
+                    fig3, ax3 = plt.subplots()
+                    for traj in out["neighbor_values"]:
+                        ax3.plot(traj, alpha=0.4)
+                    ax3.plot(out["prediction"], linewidth=3, label="Model Prediction")
+                    ax3.set_xlabel("Step")
+                    ax3.set_ylabel("Return")
+                    ax3.legend()
+                    st.pyplot(fig3)
+
+                # Optional explanation plots from explain_inference
+                st.write("**Predicted vs Actual (if available)**")
+                figs = explain_inference(out)
+                if isinstance(figs, dict):
+                    if "attention" in figs:
+                        st.pyplot(figs["attention"])
+                    if "model_attention" in figs:
+                        st.pyplot(figs["model_attention"])
+                    if "prediction" in figs:
+                        st.pyplot(figs["prediction"])
+                    if "pred_vs_actual" in figs:
+                        st.pyplot(figs["pred_vs_actual"])
+
+            # 3) LLM Commentary based on query, RAG events, and prediction
+            st.subheader("🧠 LLM Market Commentary")
+
+            # Build event context from retrieved results
+            event_context = ""
+            for r in results[:5]:
+                date_str = r.get("date", "")
+                sym = r.get("symbol", selected_symbol)
+                score = r.get("score_final", 0.0)
+                text_snip = r.get("text", "")[:400].replace("\n", " ")
+                event_context += f"[EVENT] {date_str} {sym} (score={score:.4f}) :: {text_snip}\n"
+
+            # Extract a simple scalar prediction if available
+            pred_last = None
+            if out is not None and "prediction" in out and len(out["prediction"]) > 0:
+                pred_last = float(out["prediction"][-1])
+
+            prediction_str = "N/A"
+            if pred_last is not None:
+                prediction_str = f"{pred_last:.4f} (last-step H-day predicted return)"
+
+            llm_prompt = f"""
+You are a senior sell-side equity analyst.
+
+User's free-form description / question:
+{user_query}
+
+Stock: {selected_symbol}
+As-of date: {as_of_date}
+
+Model summary:
+- TSFM+RAG predicted H-day return (last step): {prediction_str}
+
+Retrieved historical events (RAG memory):
+{event_context}
+
+Write a concise but professional market note that:
+1. Explains the model's directional view (bullish / bearish / neutral) and how strong the conviction is.
+2. Links the current situation to the most relevant historical events above.
+3. Highlights key upside catalysts and downside risks.
+4. Discusses how macro / sector context might affect this trade.
+5. Ends with a clear risk-reward assessment and what would invalidate the thesis.
+"""
+
+            try:
+                from openai import OpenAI
+                client = OpenAI()
+                resp = client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=[{"role": "user", "content": llm_prompt}]
+                )
+                llm_output = resp.choices[0].message.content
+                st.write(llm_output)
+            except Exception as e:
+                st.error(f"LLM call failed: {e}")
+
+
+
+# ============================================================
+
+
+
+
 
 # ============================================================
 # 5. END-TO-END PIPELINE (Benchmark + Backtest + LLM Report)

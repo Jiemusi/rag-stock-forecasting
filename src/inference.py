@@ -268,7 +268,37 @@ def run_inference(
         print(f"- Score:  {top['score_final']:.4f}")
         print(f"- Text:   {top['text'][:200]}...")
 
-    # Load model
+    # Pre-compute neighbor trajectories in numpy for downstream use
+    neighbor_values_np = x_values.cpu().numpy().squeeze(0)  # (K, HORIZON)
+
+    # ------------------------------------------------------------------
+    # Build a retrieval-score-based attention vector for explainability.
+    # We softmax over score_final and pad/truncate to top_k.
+    # ------------------------------------------------------------------
+    scores = np.array(
+        [r.get("score_final", 0.0) for r in rag_results],
+        dtype=np.float32,
+    )
+    k = top_k
+    if scores.size == 0:
+        # no neighbors: fall back to uniform attention
+        scores = np.zeros(k, dtype=np.float32)
+    else:
+        # pad or truncate scores to length k
+        if scores.shape[0] < k:
+            pad_val = scores.min()
+            pad = np.full(k - scores.shape[0], pad_val, dtype=np.float32)
+            scores = np.concatenate([scores, pad], axis=0)
+        elif scores.shape[0] > k:
+            scores = scores[:k]
+    # softmax
+    scores = scores - scores.max()
+    exp_scores = np.exp(scores)
+    retr_attn = exp_scores / (exp_scores.sum() + 1e-8)  # (k,)
+
+    # ------------------------------------------------------------------
+    # Load model and run TSFM to get base prediction + raw attention.
+    # ------------------------------------------------------------------
     model = load_tsfm(model_path, device=device)
 
     x_struct = x_struct.to(device)
@@ -282,8 +312,16 @@ def run_inference(
     # Shapes:
     # y_pred: (1, HORIZON)
     # attn:   (1, 1, K)
-    y_pred_np = y_pred.squeeze(0).cpu().numpy()          # (HORIZON,)
-    attn_np = attn.squeeze(0).squeeze(0).cpu().numpy()   # (K,)
+    y_pred_np = y_pred.squeeze(0).cpu().numpy()               # (HORIZON,)
+    model_attn_np = attn.squeeze(0).squeeze(0).cpu().numpy()  # (K,)
+
+    # ------------------------------------------------------------------
+    # Simple RAG kNN baseline: score-weighted neighbor trajectories.
+    # ------------------------------------------------------------------
+    try:
+        rag_knn_pred = (retr_attn.reshape(-1, 1) * neighbor_values_np).sum(axis=0)
+    except Exception:
+        rag_knn_pred = None
 
     # Also compute "actual" trajectory for this date if possible
     actual_np = compute_future_trajectory(symbol, date_str)
@@ -293,8 +331,12 @@ def run_inference(
         "date": date_str,
         "query_text": query_text,
         "prediction": y_pred_np,
-        "attention": attn_np,
-        "neighbor_values": x_values.cpu().numpy().squeeze(0),  # (K, HORIZON)
+        "rag_knn_pred": rag_knn_pred,
+        # Use retrieval-score-based attention for visualization
+        "attention": retr_attn,
+        # Keep raw TSFM attention for debugging
+        "model_attention": model_attn_np,
+        "neighbor_values": neighbor_values_np,  # (K, HORIZON)
         "rag_results": rag_results,
         "actual": actual_np,
     }
@@ -338,14 +380,18 @@ def explain_inference(result: Dict[str, Any]):
     date = result["date"]
     y_pred = result["prediction"]         # shape (HORIZON,)
     actual = result["actual"]             # shape (HORIZON,) or zeros
-    attn = result["attention"]            # shape (K,)
+    attn = result["attention"]            # retrieval-score-based attention, shape (K,)
     neighbor_values = result["neighbor_values"]  # shape (K, HORIZON)
+    rag_knn_pred = result.get("rag_knn_pred")
+    model_attn = result.get("model_attention")
 
     # -------------------------------
     # 1) Predicted 5-day trajectory
     # -------------------------------
     fig1, ax1 = plt.subplots()
-    ax1.plot(y_pred, label="Predicted", linewidth=3)
+    ax1.plot(y_pred, label="TSFM prediction", linewidth=3)
+    if rag_knn_pred is not None:
+        ax1.plot(rag_knn_pred, label="RAG kNN (score-weighted)", linewidth=2, linestyle="--")
     ax1.set_title(f"Predicted 5-Day Trajectory • {symbol} @ {date}")
     ax1.set_xlabel("Day")
     ax1.set_ylabel("Return")
@@ -357,7 +403,9 @@ def explain_inference(result: Dict[str, Any]):
     # -------------------------------
     if actual is not None and len(actual) > 0:
         fig2, ax2 = plt.subplots()
-        ax2.plot(y_pred, label="Predicted", linewidth=3)
+        ax2.plot(y_pred, label="TSFM prediction", linewidth=3)
+        if rag_knn_pred is not None:
+            ax2.plot(rag_knn_pred, label="RAG kNN (score-weighted)", linewidth=2, linestyle="--")
         ax2.plot(actual, label="Actual", linewidth=3)
         ax2.set_title(f"Predicted vs Actual • {symbol} @ {date}")
         ax2.set_xlabel("Day")
@@ -370,18 +418,32 @@ def explain_inference(result: Dict[str, Any]):
     # -------------------------------
     fig3, ax3 = plt.subplots()
     ax3.bar(range(len(attn)), attn)
-    ax3.set_title("Attention Weights Over Retrieved Events")
+    ax3.set_title("RAG Score-based Attention Over Retrieved Events")
     ax3.set_xlabel("Neighbor Index")
     ax3.set_ylabel("Weight")
     figs["attention"] = fig3
+
+    # Optional: raw TSFM attention for debugging/analysis
+    if model_attn is not None:
+        fig3b, ax3b = plt.subplots()
+        ax3b.bar(range(len(model_attn)), model_attn)
+        ax3b.set_title("Raw TSFM Attention Over Retrieved Events")
+        ax3b.set_xlabel("Neighbor Index")
+        ax3b.set_ylabel("Weight")
+        figs["model_attention"] = fig3b
 
     # -------------------------------
     # 4) Neighbor future trajectories
     # -------------------------------
     fig4, ax4 = plt.subplots()
     for i, traj in enumerate(neighbor_values):
-        ax4.plot(traj, alpha=0.5, label=f"Neighbor {i}")
-    ax4.plot(y_pred, color="black", linewidth=3, label="Predicted")
+        label = f"Neighbor {i}"
+        if i < len(attn):
+            label += f" (w={attn[i]:.2f})"
+        ax4.plot(traj, alpha=0.5, label=label)
+    ax4.plot(y_pred, color="black", linewidth=3, label="TSFM prediction")
+    if rag_knn_pred is not None:
+        ax4.plot(rag_knn_pred, color="red", linewidth=2, linestyle="--", label="RAG kNN")
     ax4.set_title("Neighbor Trajectories vs Model Prediction")
     ax4.set_xlabel("Day")
     ax4.set_ylabel("Return")
